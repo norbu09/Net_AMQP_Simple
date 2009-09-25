@@ -84,6 +84,7 @@ has 'wait_synchronous' => (
 has 'channels' => (
     is      => 'rw',
     isa     => 'HashRef',
+    clearer => 'clear_channels',
     default => sub { {} },
 );
 
@@ -284,6 +285,29 @@ sub poll {
         }
     }
     return @result;
+}
+
+sub close {
+    my ( $self ) = @_;
+
+    my $frame = Net::AMQP::Frame::Method->new(
+        method_frame => Net::AMQP::Protocol::Connection::Close->new() );
+    $frame->channel(0);
+    $self->_post($frame);
+    $self->clear_channels;
+
+  FRAME:
+    while ( my @frames = $self->_read() ) {
+        foreach my $frame (@frames) {
+            if ( $frame->isa('Net::AMQP::Frame::Method') ) {
+                my $method = $frame->method_frame;
+                if ( ref($method) eq 'Net::AMQP::Protocol::Connection::CloseOk' ) {
+                    last FRAME;
+                }
+            }
+        }
+    }
+    return;
 }
 
 ############ internal API ###########

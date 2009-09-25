@@ -10,4 +10,4 @@ $amqp->connect();
 #print $amqp->close_channel();
 #print $amqp->pub("helo world", "log");
 print $amqp->queue("blubb");
-
+$amqp->close();
