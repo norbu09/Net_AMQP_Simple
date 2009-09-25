@@ -57,6 +57,7 @@ has 'channel' => (
 
 has 'remote' => (
     is       => 'rw',
+    clearer  => 'close_socket',
     required => 0,
 );
 
@@ -122,6 +123,8 @@ sub open_channel {
         }
         confess "Ran out of channel ids (!!)" unless $id;
     }
+    $channels->{$id} = $$;
+    $self->channels($channels);
     my $frame =
       Net::AMQP::Frame::Method->new(
         method_frame => Net::AMQP::Protocol::Channel::Open->new(), );
@@ -219,7 +222,7 @@ sub pub {
     $frame = Net::AMQP::Frame::Body->new( payload => $message );
     $self->_post($frame, $id);
 
-    $self->close_channel($id);
+    return $self->close_channel($id);
 }
 
 sub queue {
@@ -298,6 +301,11 @@ sub close {
             }
         }
     }
+
+    my $sock = $self->remote;
+    close $sock;
+    $self->close_socket;
+
     return;
 }
 
