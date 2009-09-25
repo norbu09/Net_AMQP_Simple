@@ -90,7 +90,7 @@ has 'channels' => (
 sub connect {
     my ($self) = @_;
 
-    my $file = File::ShareDir::dist_file( 'Net-AMQP', 'amqp0-8.xml' );
+    my $file = File::ShareDir::dist_file( 'Net-AMQP-Simple', 'amqp0-8.xml' );
     Net::AMQP::Protocol->load_xml_spec($file);
 
     my $sock = IO::Socket::INET->new(
