@@ -11,7 +11,7 @@ use File::ShareDir 'dist_file';
 use Carp;
 use Data::Dumper;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 has 'host' => (
     is       => 'rw',
@@ -61,10 +61,9 @@ has 'remote' => (
 );
 
 has 'debug' => (
-    is       => 'ro',
+    is       => 'rw',
     isa      => 'Int',
     required => 0,
-    default  => sub { 1 }
 );
 
 has 'reading' => (
@@ -100,7 +99,7 @@ sub connect {
         PeerPort => $self->port,
     ) or confess("Error connecting to AMQP Server!");
 
-    print "connected to " . $self->host . "...\n" if $self->debug;
+    print STDERR "connected to " . $self->host . "...\n" if $self->debug;
     print $sock Net::AMQP::Protocol->header;
     $self->remote($sock);
     $self->reading(1);
@@ -126,8 +125,7 @@ sub open_channel {
     my $frame =
       Net::AMQP::Frame::Method->new(
         method_frame => Net::AMQP::Protocol::Channel::Open->new(), );
-    $frame->channel($id);
-    $self->_post($frame);
+    $self->_post($frame, $id);
     my @frames = $self->_read();
     foreach my $frame (@frames) {
         return $id
@@ -145,8 +143,7 @@ sub close_channel {
         my $frame =
           Net::AMQP::Frame::Method->new(
             method_frame => Net::AMQP::Protocol::Channel::Close->new(), );
-        $frame->channel($id);
-        $self->_post($frame);
+        $self->_post($frame, $id);
       FRAME:
         while ( my @frames = $self->_read() ) {
             foreach my $frame (@frames) {
@@ -209,8 +206,7 @@ sub pub {
 
     my $id    = $self->open_channel();
     my $frame = Net::AMQP::Protocol::Basic::Publish->new(%method_opts);
-    $frame->channel($id);
-    $self->_post($frame);
+    $self->_post($frame, $id);
 
     $frame = Net::AMQP::Frame::Header->new(
         weight    => 0,
@@ -218,12 +214,10 @@ sub pub {
         header_frame =>
           Net::AMQP::Protocol::Basic::ContentHeader->new(%content_opts),
     );
-    $frame->channel($id);
-    $self->_post($frame);
+    $self->_post($frame, $id);
 
     $frame = Net::AMQP::Frame::Body->new( payload => $message );
-    $frame->channel($id);
-    $self->_post($frame);
+    $self->_post($frame, $id);
 
     $self->close_channel($id);
 }
@@ -246,14 +240,12 @@ sub queue {
     my $frame =
       Net::AMQP::Frame::Method->new(
         method_frame => Net::AMQP::Protocol::Queue::Declare->new(%opts) );
-    $frame->channel($id);
-    $self->_post($frame);
+    $self->_post($frame, $id);
 
     $frame =
       Net::AMQP::Frame::Method->new(
         method_frame => Net::AMQP::Protocol::Basic::Consume->new(%opts) );
-    $frame->channel($id);
-    $self->_post($frame);
+    $self->_post($frame, $id);
     my $err;
   FRAME:
     while ( my @frames = $self->_read() ) {
@@ -292,7 +284,6 @@ sub close {
 
     my $frame = Net::AMQP::Frame::Method->new(
         method_frame => Net::AMQP::Protocol::Connection::Close->new() );
-    $frame->channel(0);
     $self->_post($frame);
     $self->clear_channels;
 
@@ -323,14 +314,14 @@ sub _sync_read {
 }
 
 sub _post {
-    my ( $self, $output, $sync ) = @_;
+    my ( $self, $output, $channel, $sync ) = @_;
 
     my $remote = $self->remote;
 
     if ( $output->isa("Net::AMQP::Protocol::Base") ) {
         $output = $output->frame_wrap;
     }
-    $output->channel(0) unless defined $output->channel;
+    $output->channel($channel || 0);
 
     print STDERR "--> " . Dumper($output) . "\n" if $self->debug;
     print $remote $output->to_raw_frame();
@@ -381,8 +372,7 @@ sub _parser {
 # Check the 'wait_synchronous' hash to see if this response is a synchronous reply
             my $method_frame_class = ref $method_frame;
             if ( $method_frame_class->method_spec->{synchronous} ) {
-                print
-"Checking 'wait_synchronous' hash against $method_frame_class\n"
+                print STDERR "Checking 'wait_synchronous' hash against $method_frame_class\n"
                   if $self->debug;
 
                 my $matching_output_class;
@@ -394,7 +384,7 @@ sub _parser {
                 }
 
                 if ($matching_output_class) {
-                    print 'Response type '
+                    print STDERR 'Response type '
                       . $method_frame_class
                       . ' found from waiting request '
                       . $matching_output_class . " \n"
@@ -407,17 +397,17 @@ sub _parser {
                     if ( my $callback =
                         delete $details->{request}{synchronous_callback} )
                     {
-                        print "Calling $matching_output_class callback\n"
+                        print STDERR "Calling $matching_output_class callback\n"
                           if $self->debug;
                         $callback->($frame);
                     }
 
                     # Dequeue anything that was blocked by this
                     foreach my $output ( @{ $details->{process_after} } ) {
-                        print
+                        print STDERR  
 "Dequeueing items that blocked due to $method_frame_class\n"
                           if $self->debug;
-                        $self->_post( $output, 1 );
+                        $self->_post( $output,0,1 );
                     }
 
                     # Consider this frame handled
@@ -447,9 +437,7 @@ sub _parser {
                               { LOGIN => $self->user, PASSWORD => $self->pass },
                             locale => 'en_US',
                         ),
-                        ,
-                        1
-                    );
+                        ,0,1);
                     next FRAMES;
                 }
                 elsif (
@@ -463,7 +451,7 @@ sub _parser {
                             , # TODO - actually act on this number and the Tune value
                             heartbeat => 0,
                         ),
-                        1
+                        0,1
                     );
                     $self->_post(
                         Net::AMQP::Frame::Method->new(
@@ -475,7 +463,7 @@ sub _parser {
                               ),
                         ),
                         ,
-                        1
+                        0,1
                     );
                     next FRAMES;
                 }
@@ -489,7 +477,7 @@ sub _parser {
 #$self->{Logger}->error("Received frame on channel ".$frame->channel." which we didn't request the creation of");
                 next FRAMES;
             }
-            $self->_post( $channel->{Alias}, server_input => $frame );
+            #$self->_post( $channel->{Alias}, server_input => $frame );
         }
         else {
 
