@@ -8,5 +8,6 @@ my $amqp = Net::AMQP::Simple->new();
 
 $amqp->connect();
 #print $amqp->close_channel();
-print $amqp->pub("helo world", "log");
+#print $amqp->pub("helo world", "log");
+print $amqp->queue("blubb");
 

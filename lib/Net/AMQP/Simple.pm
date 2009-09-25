@@ -2,6 +2,7 @@ package Net::AMQP::Simple;
 
 use Moose;
 use namespace::clean -except => ['meta'];
+
 #use Params::Validate qw(validate validate_with);
 use IO::Socket::INET;
 use Net::AMQP;
@@ -102,84 +103,7 @@ sub connect {
     print $sock Net::AMQP::Protocol->header;
     $self->remote($sock);
     $self->reading(1);
-    $self->sync_read();
-}
-
-sub post {
-    my ( $self, $output, $sync ) = @_;
-
-    my $remote = $self->remote;
-
-    if ( $output->isa("Net::AMQP::Protocol::Base") ) {
-        $output = $output->frame_wrap;
-    }
-    $output->channel(0) unless defined $output->channel;
-
-    print STDERR "--> " . Dumper($output) . "\n" if $self->debug;
-    print $remote $output->to_raw_frame();
-
-    if ($sync) {
-        my $output_class = ref( $output->method_frame );
-        my $responses    = $output_class->method_spec->{responses};
-        $self->{wait_synchronous}{$output_class} = {
-            request       => $output,
-            responses     => $responses,
-            process_after => [],
-        };
-    }
-
-}
-
-sub pub {
-    my ( $self, $message, $queue, $exchange ) = @_;
-
-    my %method_opts = (
-        ticket      => 0,
-        exchange    => $exchange,    # default exchange
-        routing_key => $queue,       # route to my queue
-        mandatory   => 1,
-        immediate   => 0,
-    );
-
-    my %content_opts = (
-        content_type => 'application/octet-stream',
-        content_encoding => '',
-        headers          => {},
-        delivery_mode => 1,          # non-persistent
-        priority      => 1,
-        correlation_id   => '',
-        reply_to         => '',
-        expiration       => '',
-        message_id       => '',
-        timestamp        => time,
-        type             => '',
-        user_id          => '',
-        app_id           => '',
-        cluster_id       => '',
-    );
-
-    my $id     = $self->open_channel();
-    my $output = Net::AMQP::Protocol::Basic::Publish->new(%method_opts);
-
-    my $frame =
-      $output->isa("Net::AMQP::Protocol::Base") ? $output->frame_wrap : $output;
-    $frame->channel($id);
-    $self->post($frame);
-
-    $frame = Net::AMQP::Frame::Header->new(
-        weight    => 0,
-        body_size => length($message),
-        header_frame =>
-          Net::AMQP::Protocol::Basic::ContentHeader->new(%content_opts),
-    );
-    $frame->channel($id);
-    $self->post($frame);
-
-    $frame = Net::AMQP::Frame::Body->new( payload => $message );
-    $frame->channel($id);
-    $self->post($frame);
-
-    $self->close_channel($id);
+    $self->_sync_read();
 }
 
 sub open_channel {
@@ -202,7 +126,7 @@ sub open_channel {
       Net::AMQP::Frame::Method->new(
         method_frame => Net::AMQP::Protocol::Channel::Open->new(), );
     $frame->channel($id);
-    $self->post($frame);
+    $self->_post($frame);
     my @frames = $self->_read();
     foreach my $frame (@frames) {
         return $id
@@ -221,7 +145,7 @@ sub close_channel {
           Net::AMQP::Frame::Method->new(
             method_frame => Net::AMQP::Protocol::Channel::Close->new(), );
         $frame->channel($id);
-        $self->post($frame);
+        $self->_post($frame);
       FRAME:
         while ( my @frames = $self->_read() ) {
             foreach my $frame (@frames) {
@@ -254,7 +178,117 @@ sub close_channel {
     return $err;
 }
 
-sub sync_read {
+sub pub {
+    my ( $self, $message, $queue, $exchange ) = @_;
+
+    my %method_opts = (
+        ticket      => 0,
+        exchange    => $exchange,    # default exchange
+        routing_key => $queue,       # route to my queue
+        mandatory   => 1,
+        immediate   => 0,
+    );
+
+    my %content_opts = (
+        content_type     => 'application/octet-stream',
+        content_encoding => '',
+        headers          => {},
+        delivery_mode    => 1,                            # non-persistent
+        priority         => 1,
+        correlation_id   => '',
+        reply_to         => '',
+        expiration       => '',
+        message_id       => '',
+        timestamp        => time,
+        type             => '',
+        user_id          => '',
+        app_id           => '',
+        cluster_id       => '',
+    );
+
+    my $id    = $self->open_channel();
+    my $frame = Net::AMQP::Protocol::Basic::Publish->new(%method_opts);
+    $frame->channel($id);
+    $self->_post($frame);
+
+    $frame = Net::AMQP::Frame::Header->new(
+        weight    => 0,
+        body_size => length($message),
+        header_frame =>
+          Net::AMQP::Protocol::Basic::ContentHeader->new(%content_opts),
+    );
+    $frame->channel($id);
+    $self->_post($frame);
+
+    $frame = Net::AMQP::Frame::Body->new( payload => $message );
+    $frame->channel($id);
+    $self->_post($frame);
+
+    $self->close_channel($id);
+}
+
+sub queue {
+    my ( $self, $queue, $auto ) = @_;
+
+    my %opts = (
+        ticket       => 0,
+        queue        => $queue,
+        consumer_tag => '',                 # auto-generated
+        no_ack       => 1,
+        exclusive    => 0,
+        auto_delete  => ( $auto ? 1 : 0 ),
+        nowait       => 0,                  # do not send the ConsumeOk response
+    );
+
+    my $id = $self->open_channel();
+
+    my $frame =
+      Net::AMQP::Frame::Method->new(
+        method_frame => Net::AMQP::Protocol::Queue::Declare->new(%opts) );
+    $frame->channel($id);
+    $self->_post($frame);
+
+    $frame =
+      Net::AMQP::Frame::Method->new(
+        method_frame => Net::AMQP::Protocol::Basic::Consume->new(%opts) );
+    $frame->channel($id);
+    $self->_post($frame);
+    my $err;
+  FRAME:
+    while ( my @frames = $self->_read() ) {
+        foreach my $frame (@frames) {
+            if ( $frame->isa('Net::AMQP::Frame::Method') ) {
+                my $method = $frame->method_frame;
+                if ( ref($method) eq 'Net::AMQP::Protocol::Basic::ConsumeOk' ) {
+                    last FRAME;
+                }
+                elsif (
+                    ref($method) eq 'Net::AMQP::Protocol::Connection::Close' )
+                {
+                    warn $method->reply_text;
+                }
+            }
+        }
+    }
+    return $id;
+}
+
+sub poll {
+    my ( $self, $id ) = @_;
+
+    my @frames = $self->_read();
+    my @result;
+    foreach my $frame (@frames) {
+        if ( $frame->isa('Net::AMQP::Frame::Body') ) {
+            push( @result, $frame->{payload} );
+        }
+    }
+    return @result;
+}
+
+############ internal API ###########
+
+sub _sync_read {
     my ($self) = @_;
 
     my @frames;
@@ -264,7 +298,30 @@ sub sync_read {
     return @frames;
 }
 
-############ internal API ###########
+sub _post {
+    my ( $self, $output, $sync ) = @_;
+
+    my $remote = $self->remote;
+
+    if ( $output->isa("Net::AMQP::Protocol::Base") ) {
+        $output = $output->frame_wrap;
+    }
+    $output->channel(0) unless defined $output->channel;
+
+    print STDERR "--> " . Dumper($output) . "\n" if $self->debug;
+    print $remote $output->to_raw_frame();
+
+    if ($sync) {
+        my $output_class = ref( $output->method_frame );
+        my $responses    = $output_class->method_spec->{responses};
+        $self->{wait_synchronous}{$output_class} = {
+            request       => $output,
+            responses     => $responses,
+            process_after => [],
+        };
+    }
+
+}
 
 sub _read {
     my ($self) = @_;
@@ -336,7 +393,7 @@ sub _parser {
                         print
 "Dequeueing items that blocked due to $method_frame_class\n"
                           if $self->debug;
-                        $self->post( $output, 1 );
+                        $self->_post( $output, 1 );
                     }
 
                     # Consider this frame handled
@@ -352,7 +409,7 @@ sub _parser {
                         'Net::AMQP::Protocol::Connection::Start')
                   )
                 {
-                    $self->post(
+                    $self->_post(
                         Net::AMQP::Protocol::Connection::StartOk->new(
                             client_properties => {
                                 platform    => 'Perl',
@@ -375,7 +432,7 @@ sub _parser {
                     $method_frame->isa('Net::AMQP::Protocol::Connection::Tune')
                   )
                 {
-                    $self->post(
+                    $self->_post(
                         Net::AMQP::Protocol::Connection::TuneOk->new(
                             channel_max => 0,
                             frame_max   => 131072
@@ -384,7 +441,7 @@ sub _parser {
                         ),
                         1
                     );
-                    $self->post(
+                    $self->_post(
                         Net::AMQP::Frame::Method->new(
                             method_frame =>
                               Net::AMQP::Protocol::Connection::Open->new(
@@ -408,7 +465,7 @@ sub _parser {
 #$self->{Logger}->error("Received frame on channel ".$frame->channel." which we didn't request the creation of");
                 next FRAMES;
             }
-            $self->post( $channel->{Alias}, server_input => $frame );
+            $self->_post( $channel->{Alias}, server_input => $frame );
         }
         else {
 
