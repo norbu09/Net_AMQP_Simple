@@ -276,7 +276,7 @@ sub poll {
     my @frames;
     if ( timeout_call( $timeout ,sub  { @frames = $self->_read(); })){
         warn "Request timed out after $timeout";
-        return;
+        last;
     }
     foreach my $frame (@frames) {
         if ( $frame->isa('Net::AMQP::Frame::Body') ) {
