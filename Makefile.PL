@@ -9,6 +9,7 @@ requires 'Moose';
 requires 'Net::AMQP';
 requires 'File::ShareDir';
 requires 'namespace::clean';
+requires 'Sys::SigAction';
 
 build_requires 'Test::More';
 

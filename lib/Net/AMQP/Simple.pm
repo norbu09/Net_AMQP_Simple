@@ -2,14 +2,13 @@ package Net::AMQP::Simple;
 
 use Moose;
 use namespace::clean -except => ['meta'];
-
-#use Params::Validate qw(validate validate_with);
 use IO::Socket::INET;
 use Net::AMQP;
 use Net::AMQP::Common qw(:all);
 use File::ShareDir 'dist_file';
 use Carp;
 use Data::Dumper;
+use Sys::SigAction qw( timeout_call );
 
 our $VERSION = '0.02';
 
@@ -272,19 +271,16 @@ sub queue {
 sub poll {
     my ( $self, $timeout) = @_;
 
-    if($timeout){
-        local $SIG{ALRM} = sub  { return "timeout" };
-        alarm $timeout;
-    }
+    $timeout = 9999 unless $timeout;
     my @result;
-    my @frames = $self->_read();
+    my @frames;
+    if ( timeout_call( $timeout ,sub  { @frames = $self->_read(); })){
+        confess "Request timed out after $timeout";
+    }
     foreach my $frame (@frames) {
         if ( $frame->isa('Net::AMQP::Frame::Body') ) {
             push( @result, $frame->{payload} );
         }
-    }
-    if($timeout){
-        alarm 0;
     }
     return @result;
 }

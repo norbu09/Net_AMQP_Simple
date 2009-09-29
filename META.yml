@@ -24,6 +24,7 @@ requires:
   File::ShareDir: 0
   Moose: 0
   Net::AMQP: 0
+  Sys::SigAction: 0
   namespace::clean: 0
 resources:
   license: http://dev.perl.org/licenses/
