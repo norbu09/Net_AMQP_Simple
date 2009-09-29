@@ -270,7 +270,7 @@ sub queue {
 }
 
 sub poll {
-    my ( $self, $id, $timeout) = @_;
+    my ( $self, $timeout) = @_;
 
     if($timeout){
         local $SIG{ALRM} = sub  { return "timeout" };
