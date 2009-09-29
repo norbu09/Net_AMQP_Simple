@@ -8,6 +8,7 @@ license  'perl';
 requires 'Moose';
 requires 'Net::AMQP';
 requires 'File::ShareDir';
+requires 'namespace::clean';
 
 build_requires 'Test::More';
 

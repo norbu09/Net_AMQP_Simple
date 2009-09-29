@@ -270,14 +270,21 @@ sub queue {
 }
 
 sub poll {
-    my ( $self, $id ) = @_;
+    my ( $self, $id, $timeout) = @_;
 
-    my @frames = $self->_read();
+    if($timeout){
+        local $SIG{ALRM} = sub  { return "timeout" };
+        alarm $timeout;
+    }
     my @result;
+    my @frames = $self->_read();
     foreach my $frame (@frames) {
         if ( $frame->isa('Net::AMQP::Frame::Body') ) {
             push( @result, $frame->{payload} );
         }
+    }
+    if($timeout){
+        alarm 0;
     }
     return @result;
 }
