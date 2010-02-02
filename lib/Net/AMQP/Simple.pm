@@ -10,7 +10,7 @@ use Carp;
 use Data::Dumper;
 use Sys::SigAction qw( timeout_call );
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 has 'host' => (
     is       => 'rw',
@@ -130,8 +130,7 @@ sub open_channel {
     $self->_post($frame, $id);
     my @frames = $self->_read();
     foreach my $frame (@frames) {
-        return $id
-          if $frame->method_frame->isa('Net::AMQP::Protocol::Channel::OpenOk');
+        return $id if $frame->method_frame->isa('Net::AMQP::Protocol::Channel::OpenOk');
     }
     confess "Did not get a Channel!";
 }
@@ -206,7 +205,7 @@ sub pub {
         cluster_id       => '',
     );
 
-    my $id    = $self->open_channel();
+    my $id    = $self->open_channel($self->channel || undef);
     my $frame = Net::AMQP::Protocol::Basic::Publish->new(%method_opts);
     $self->_post($frame, $id);
 
@@ -232,12 +231,12 @@ sub queue {
         queue        => $queue,
         consumer_tag => '',                 # auto-generated
         no_ack       => 1,
-        exclusive    => 0,
+        exclusive    => ( $auto ? 1 : 0 ),
         auto_delete  => ( $auto ? 1 : 0 ),
         nowait       => 0,                  # do not send the ConsumeOk response
     );
 
-    my $id = $self->open_channel();
+    my $id = $self->open_channel($self->channel || undef);
 
     my $frame =
       Net::AMQP::Frame::Method->new(
