@@ -10,7 +10,7 @@ use Carp;
 use Data::Dumper;
 use Sys::SigAction qw( timeout_call );
 
-our $VERSION = '0.03';
+our $VERSION = '0.3';
 
 has 'host' => (
     is       => 'rw',
@@ -85,6 +85,20 @@ has 'channels' => (
     isa     => 'HashRef',
     clearer => 'clear_channels',
     default => sub { {} },
+);
+
+has 'retry_count' => (
+    is       => 'rw',
+    isa      => 'Int',
+    required => 1,
+    default  => sub { 0 }
+);
+
+has 'retry_max' => (
+    is       => 'rw',
+    isa      => 'Int',
+    required => 1,
+    default  => sub { 10 }
 );
 
 sub connect {
@@ -173,6 +187,11 @@ sub close_channel {
     }
     else {
         $err = "ID ERROR - Expected Channel ID";
+    }
+    my $channels = $self->channels;
+    if ( $id && $channels->{$id} ) {
+        delete $channels->{$id};
+        $self->channels($channels);
     }
     return $err;
 }
@@ -335,7 +354,7 @@ sub _post {
     $output->channel($channel || 0);
 
     print STDERR "--> " . Dumper($output) . "\n" if $self->debug;
-    print $remote $output->to_raw_frame();
+    print $remote $output->to_raw_frame() || confess "Could not write to socket - connection lost?";
 
     if ($sync) {
         my $output_class = ref( $output->method_frame );
@@ -358,6 +377,18 @@ sub _read {
     read( $self->remote, $data, 8 );
     $stack .= $data;
     my ( $type_id, $channel, $length ) = unpack 'CnN', substr $data, 0, 7, '';
+    # test this and see if this really works as expected!
+    if (!$length){
+        if($self->retry_count < $self->retry_max){
+            my $c = $self->retry_count;
+            $c++;
+            $self->retry_count($c);
+            return $self->_read();
+        } else {
+            $self->retry_count(0);
+            return;
+        }
+    }
 
     # read until $length bytes read
     while ( $length > 0 ) {
@@ -368,6 +399,7 @@ sub _read {
     my @frames = Net::AMQP->parse_raw_frames( \$stack );
     print STDERR "<-- " . Dumper(@frames) if $self->debug;
     print STDERR "-----------\n" if $self->debug;
+    $self->retry_count(0);
     return @frames;
 }
 
